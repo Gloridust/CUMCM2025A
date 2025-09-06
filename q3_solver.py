@@ -8,6 +8,13 @@ Q3: FY1 投放 3 枚烟幕干扰弹，最大化对 M1 的遮蔽时间（LOS 判�
 """
 import numpy as np, math, pandas as pd, os, time
 from math import cos, sin, pi
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.patches as patches
+
+# 设置中文字体
+plt.rcParams['font.sans-serif'] = ['STHeiti']
+plt.rcParams['axes.unicode_minus'] = False
 
 # ---------------- 基本常量 ----------------
 g = 9.8
@@ -194,6 +201,339 @@ def refine_v_theta(v0, theta0_deg, E0, cfg):
                 break
     return best_val, v, th_deg, Es, uni
 
+# ---------------- 可视化模块 ----------------
+def create_visualizations(v_best, th_best, E_best, uni_best, tot):
+    """创建Q3问题的可视化图表"""
+    os.makedirs("./output", exist_ok=True)
+    
+    th_rad = math.radians(th_best)
+    ux, uy = math.cos(th_rad), math.sin(th_rad)
+    
+    # 计算关键位置
+    explosion_points = []
+    drop_points = []
+    for k, E in enumerate(E_best):
+        Dk = DROP_TIMES[k]
+        x_e = U0[0] + v_best * ux * E
+        y_e = U0[1] + v_best * uy * E
+        z_e = 1800.0 - 0.5 * g * (E - Dk)**2
+        explosion_points.append([x_e, y_e, z_e])
+        
+        r_drop = U0 + v_best * np.array([ux, uy, 0.0]) * Dk
+        drop_points.append(r_drop)
+    
+    explosion_points = np.array(explosion_points)
+    drop_points = np.array(drop_points)
+    
+    # 1. 三维场景图
+    fig = plt.figure(figsize=(16, 12))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # 绘制导弹轨迹
+    missile_flight_time = np.linalg.norm(M0) / v_missile
+    t_trajectory = np.linspace(0, missile_flight_time, 100)
+    missile_trajectory = np.array([missile_pos(t) for t in t_trajectory])
+    ax.plot(missile_trajectory[:, 0], missile_trajectory[:, 1], missile_trajectory[:, 2], 
+            'r-', linewidth=3, label='导弹M1轨迹')
+    
+    # 绘制无人机轨迹
+    t_uav = np.linspace(0, max(E_best) * 1.2, 100)
+    uav_trajectory = np.array([U0 + v_best * np.array([ux, uy, 0.0]) * t for t in t_uav])
+    ax.plot(uav_trajectory[:, 0], uav_trajectory[:, 1], uav_trajectory[:, 2], 
+            'b-', linewidth=2, label='无人机FY1轨迹')
+    
+    # 标记关键点
+    ax.scatter(*M0, color='red', s=120, label='导弹初始位置M1')
+    ax.scatter(*U0, color='blue', s=120, label='无人机初始位置FY1')
+    ax.scatter(0, 0, 0, color='black', s=120, marker='s', label='假目标')
+    ax.scatter(*T, color='green', s=120, marker='^', label='真目标')
+    
+    # 绘制3个投放点和起爆点
+    colors = ['orange', 'cyan', 'magenta']
+    for i, (drop_pt, expl_pt, color) in enumerate(zip(drop_points, explosion_points, colors)):
+        ax.scatter(*drop_pt, color=color, s=180, marker='*', 
+                  label=f'烟幕弹{i+1}投放点')
+        ax.scatter(*expl_pt, color=color, s=180, marker='o', 
+                  label=f'烟幕弹{i+1}起爆点')
+        
+        # 绘制烟幕球体
+        u = np.linspace(0, 2 * np.pi, 15)
+        v = np.linspace(0, np.pi, 15)
+        x_sphere = R * np.outer(np.cos(u), np.sin(v)) + expl_pt[0]
+        y_sphere = R * np.outer(np.sin(u), np.sin(v)) + expl_pt[1]
+        z_sphere = R * np.outer(np.ones(np.size(u)), np.cos(v)) + expl_pt[2]
+        ax.plot_surface(x_sphere, y_sphere, z_sphere, alpha=0.2, color=color)
+    
+    # 绘制真目标圆柱体
+    theta = np.linspace(0, 2*np.pi, 20)
+    z_cyl = np.linspace(0, 10, 10)
+    theta_mesh, z_mesh = np.meshgrid(theta, z_cyl)
+    x_cyl = 7 * np.cos(theta_mesh)
+    y_cyl = T[1] + 7 * np.sin(theta_mesh)
+    ax.plot_surface(x_cyl, y_cyl, z_mesh, alpha=0.4, color='green')
+    
+    ax.set_xlabel('X (米)')
+    ax.set_ylabel('Y (米)')
+    ax.set_zlabel('Z (米)')
+    ax.set_title('Q3: 单无人机三烟幕弹协同干扰三维场景图', fontsize=14, fontweight='bold')
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig('./output/q3_3d_scenario.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 2. 俯视图（XY平面）
+    fig, ax = plt.subplots(figsize=(14, 10))
+    
+    # 绘制轨迹投影
+    ax.plot(missile_trajectory[:, 0], missile_trajectory[:, 1], 'r-', linewidth=3, label='导弹M1轨迹')
+    ax.plot(uav_trajectory[:, 0], uav_trajectory[:, 1], 'b-', linewidth=2, label='无人机FY1轨迹')
+    
+    # 标记关键点
+    ax.scatter(M0[0], M0[1], color='red', s=120, label='导弹初始位置M1')
+    ax.scatter(U0[0], U0[1], color='blue', s=120, label='无人机初始位置FY1')
+    ax.scatter(0, 0, color='black', s=120, marker='s', label='假目标')
+    ax.scatter(T[0], T[1], color='green', s=120, marker='^', label='真目标')
+    
+    # 绘制3个投放点、起爆点和烟幕覆盖区域
+    for i, (drop_pt, expl_pt, color) in enumerate(zip(drop_points, explosion_points, colors)):
+        ax.scatter(drop_pt[0], drop_pt[1], color=color, s=180, marker='*', 
+                  label=f'烟幕弹{i+1}投放点')
+        ax.scatter(expl_pt[0], expl_pt[1], color=color, s=180, marker='o', 
+                  label=f'烟幕弹{i+1}起爆点')
+        
+        # 绘制烟幕覆盖区域
+        smoke_circle = patches.Circle((expl_pt[0], expl_pt[1]), R, linewidth=2, 
+                                    edgecolor=color, facecolor=color, alpha=0.2, 
+                                    label=f'烟幕{i+1}覆盖区域' if i < 3 else "")
+        ax.add_patch(smoke_circle)
+    
+    # 绘制真目标圆柱体俯视图
+    circle_true = patches.Circle((T[0], T[1]), 7, linewidth=2, edgecolor='green', 
+                               facecolor='lightgreen', alpha=0.3, label='真目标保护区')
+    ax.add_patch(circle_true)
+    
+    # 绘制遮蔽时间段的视线
+    if uni_best:
+        for i, (start, end) in enumerate(uni_best[:3]):  # 最多显示3个时段
+            mid_time = (start + end) / 2
+            missile_pos_mid = missile_pos(mid_time)
+            ax.plot([missile_pos_mid[0], T[0]], [missile_pos_mid[1], T[1]], 
+                   '--', linewidth=2, alpha=0.6, 
+                   label=f'遮蔽时段{i+1}视线' if i < 3 else "")
+    
+    ax.set_xlabel('X (米)')
+    ax.set_ylabel('Y (米)')
+    ax.set_title('Q3: 单无人机三烟幕弹协同干扰俯视图', fontsize=14, fontweight='bold')
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax.grid(True)
+    ax.axis('equal')
+    
+    plt.tight_layout()
+    plt.savefig('./output/q3_top_view.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 3. 时间轴分析图
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10))
+    
+    # 上图：每个烟幕弹的单独遮蔽效果
+    for i, E in enumerate(E_best):
+        Dk = DROP_TIMES[i]
+        x_e = U0[0] + v_best * ux * E
+        y_e = U0[1] + v_best * uy * E
+        z_e = 1800.0 - 0.5 * g * (E - Dk)**2
+        
+        single_total, single_intervals = intervals_for_explosion(E, x_e, y_e, z_e, dt_scan=0.02)
+        
+        # 绘制单个烟幕弹的遮蔽时间段
+        for start, end in single_intervals:
+            ax1.barh(i, end-start, left=start, height=0.6, 
+                    color=colors[i], alpha=0.7, 
+                    label=f'烟幕弹{i+1}' if start == single_intervals[0][0] else "")
+        
+        # 标记起爆时间
+        ax1.axvline(E, color=colors[i], linestyle=':', alpha=0.8)
+        ax1.text(E, i+0.3, f'起爆{i+1}', rotation=90, fontsize=8, ha='center')
+    
+    ax1.set_xlabel('时间 (秒)')
+    ax1.set_ylabel('烟幕弹编号')
+    ax1.set_yticks(range(3))
+    ax1.set_yticklabels(['烟幕弹1', '烟幕弹2', '烟幕弹3'])
+    ax1.set_title('各烟幕弹单独遮蔽效果', fontweight='bold')
+    ax1.legend()
+    ax1.grid(True, axis='x')
+    
+    # 下图：合并后的总遮蔽效果
+    ax2.barh(0, missile_flight_time, height=0.3, color='lightcoral', alpha=0.7, label='导弹飞行时间')
+    
+    # 绘制合并后的遮蔽区间
+    for i, (start, end) in enumerate(uni_best):
+        ax2.barh(0.5, end-start, left=start, height=0.3, color='green', alpha=0.8, 
+                label='协同遮蔽时间' if i == 0 else "")
+    
+    ax2.set_xlabel('时间 (秒)')
+    ax2.set_yticks([0, 0.5])
+    ax2.set_yticklabels(['导弹飞行', '协同遮蔽'])
+    ax2.set_title(f'协同遮蔽总效果: {tot:.3f}秒', fontweight='bold')
+    ax2.legend()
+    ax2.grid(True, axis='x')
+    
+    plt.tight_layout()
+    plt.savefig('./output/q3_time_analysis.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 4. 优化过程分析图
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+    
+    # 子图1: 遮蔽时间随速度变化
+    speeds = np.linspace(70, 140, 30)
+    speed_coverage = []
+    for v_test in speeds:
+        # 使用最优角度和起爆时间测试不同速度
+        test_result = search_three_charges(v_test, th_best, tstep=0.3, dt_scan=0.1, topk=8)
+        if test_result:
+            speed_coverage.append(test_result[0])
+        else:
+            speed_coverage.append(0)
+    
+    ax1.plot(speeds, speed_coverage, 'b-', linewidth=2)
+    ax1.axvline(v_best, color='r', linestyle='--', label=f'最优速度: {v_best:.1f}m/s')
+    ax1.set_xlabel('无人机速度 (m/s)')
+    ax1.set_ylabel('总遮蔽时间 (秒)')
+    ax1.set_title('遮蔽时间随无人机速度变化', fontweight='bold')
+    ax1.legend()
+    ax1.grid(True)
+    
+    # 子图2: 遮蔽时间随角度变化
+    angles = np.linspace(th_best-2, th_best+2, 30)
+    angle_coverage = []
+    for th_test in angles:
+        test_result = search_three_charges(v_best, th_test, tstep=0.3, dt_scan=0.1, topk=8)
+        if test_result:
+            angle_coverage.append(test_result[0])
+        else:
+            angle_coverage.append(0)
+    
+    ax2.plot(angles, angle_coverage, 'g-', linewidth=2)
+    ax2.axvline(th_best, color='r', linestyle='--', label=f'最优角度: {th_best:.1f}°')
+    ax2.set_xlabel('飞行角度 (度)')
+    ax2.set_ylabel('总遮蔽时间 (秒)')
+    ax2.set_title('遮蔽时间随飞行角度变化', fontweight='bold')
+    ax2.legend()
+    ax2.grid(True)
+    
+    # 子图3: 起爆时间序列
+    ax3.bar(range(1, 4), E_best, color=colors, alpha=0.7, edgecolor='black')
+    ax3.set_xlabel('烟幕弹编号')
+    ax3.set_ylabel('起爆时间 (秒)')
+    ax3.set_title('各烟幕弹起爆时间序列', fontweight='bold')
+    ax3.set_xticks(range(1, 4))
+    ax3.grid(True, axis='y')
+    
+    # 在柱状图上添加数值标签
+    for i, e_time in enumerate(E_best):
+        ax3.text(i+1, e_time + 0.1, f'{e_time:.2f}s', ha='center', va='bottom', fontweight='bold')
+    
+    # 子图4: 投放时间vs起爆时间
+    drop_times = DROP_TIMES
+    explode_times = E_best
+    delays = [e - d for e, d in zip(explode_times, drop_times)]
+    
+    ax4.scatter(drop_times, explode_times, c=colors, s=150, alpha=0.7, edgecolor='black')
+    for i, (dt, et, delay) in enumerate(zip(drop_times, explode_times, delays)):
+        ax4.annotate(f'弹{i+1}\n延迟{delay:.2f}s', (dt, et), xytext=(5, 5), 
+                    textcoords='offset points', fontsize=8)
+    
+    # 绘制对角线参考
+    min_time = min(min(drop_times), min(explode_times))
+    max_time = max(max(drop_times), max(explode_times))
+    ax4.plot([min_time, max_time], [min_time, max_time], 'k--', alpha=0.5, label='无延迟线')
+    
+    ax4.set_xlabel('投放时间 (秒)')
+    ax4.set_ylabel('起爆时间 (秒)')
+    ax4.set_title('投放时间 vs 起爆时间关系', fontweight='bold')
+    ax4.legend()
+    ax4.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig('./output/q3_optimization_analysis.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print("✓ Q3可视化图表已保存到output/目录")
+
+def save_results_to_excel(v_best, th_best, E_best, uni_best, tot):
+    """保存结果到Excel文件"""
+    os.makedirs("./output", exist_ok=True)
+    
+    th_rad = math.radians(th_best)
+    ux, uy = math.cos(th_rad), math.sin(th_rad)
+    heading_deg = int(round((math.degrees(math.atan2(uy, ux))) % 360))
+    
+    # 按照题目要求的格式保存Q3结果
+    rows = []
+    for k, E in enumerate(E_best, start=1):
+        Dk = DROP_TIMES[k-1]
+        x_e = U0[0] + v_best * ux * E
+        y_e = U0[1] + v_best * uy * E
+        z_e = 1800.0 - 0.5 * g * (E - Dk)**2
+        r_drop = U0 + v_best * np.array([ux, uy, 0.0]) * Dk
+        ti, _ = intervals_for_explosion(E, x_e, y_e, z_e, dt_scan=0.06)
+        
+        rows.append({
+            '无人机运动方向': heading_deg,
+            '无人机运动速度 (m/s)': round(v_best, 1),
+            '烟幕干扰弹编号（1 2 3）': k,
+            '烟幕干扰弹投放点的x坐标 (m)': round(r_drop[0], 1),
+            '烟幕干扰弹投放点的y坐标 (m)': round(r_drop[1], 1),
+            '烟幕干扰弹投放点的z坐标 (m)': round(r_drop[2], 1),
+            '烟幕干扰弹起爆点的x坐标 (m)': round(x_e, 1),
+            '烟幕干扰弹起爆点的y坐标 (m)': round(y_e, 1),
+            '烟幕干扰弹起爆点的z坐标 (m)': round(z_e, 1),
+            '有效干扰时长 (s)': round(ti, 3)
+        })
+    
+    df = pd.DataFrame(rows)
+    
+    # 保存到output目录 - Q3对应的是q3_result1_data.xlsx
+    output_file = "./output/q3_result1_data.xlsx"
+    df.to_excel(output_file, index=False)
+    print(f"✓ 结果已保存到: {output_file}")
+    
+    # 保存详细分析结果
+    detailed_rows = [{
+        'scenario': 'Q3_three_bombs',
+        'uav_id': 'FY1',
+        'optimization_method': 'coordinate_descent',
+        'uav_direction_deg': heading_deg,
+        'uav_speed_m_s': round(v_best, 1),
+        'flight_angle_rad': round(th_rad, 4),
+        'num_bombs': 3,
+        'drop_times': str([round(dt, 3) for dt in DROP_TIMES]),
+        'explode_times': str([round(e, 3) for e in E_best]),
+        'explode_delays': str([round(e-d, 3) for e, d in zip(E_best, DROP_TIMES)]),
+        'total_coverage_time_s': round(tot, 6),
+        'coverage_intervals': str([(round(a, 3), round(b, 3)) for a, b in uni_best]),
+        'num_intervals': len(uni_best),
+        'individual_coverage_times': str([round(intervals_for_explosion(
+            E_best[i], 
+            U0[0] + v_best * ux * E_best[i],
+            U0[1] + v_best * uy * E_best[i],
+            1800.0 - 0.5 * g * (E_best[i] - DROP_TIMES[i])**2,
+            dt_scan=0.06)[0], 3) for i in range(3)])
+    }]
+    
+    df_detailed = pd.DataFrame(detailed_rows)
+    df_detailed.to_excel("./output/q3_detailed_results.xlsx", index=False)
+    
+    print("\n📁 生成的文件:")
+    print("  - output/q3_result1_data.xlsx (Q3标准结果，对应题目result1.xlsx)")
+    print("  - output/q3_detailed_results.xlsx (详细分析数据)")
+    print("  - output/q3_3d_scenario.png (三维场景图)")
+    print("  - output/q3_top_view.png (俯视图)")
+    print("  - output/q3_time_analysis.png (时间轴分析图)")
+    print("  - output/q3_optimization_analysis.png (优化分析图)")
+
 # ---------------- 主流程（粗扫→精化） ----------------
 def main():
     # 使用 balanced 模式的参数（借鉴你朋友代码）
@@ -251,41 +591,30 @@ def main():
     if best_final is None:
         print("Refinement failed to find improved solution.")
         return
+    
     tot, v_best, th_best, E_best, uni_best = best_final
-    # prepare rows matching result1 template
-    th_rad = math.radians(th_best); ux,uy = math.cos(th_rad), math.sin(th_rad)
-    heading_deg = int(round((math.degrees(math.atan2(uy, ux))) % 360))
-    rows=[]
-    for k, E in enumerate(E_best, start=1):
-        Dk = DROP_TIMES[k-1]
-        x_e = U0[0] + v_best*ux*E
-        y_e = U0[1] + v_best*uy*E
-        z_e = 1800.0 - 0.5*g*(E - Dk)**2
-        r_drop = U0 + v_best*np.array([ux,uy,0.0]) * Dk
-        ti, _ = intervals_for_explosion(E, x_e, y_e, z_e, dt_scan=cfg['DT_FINE'])
-        rows.append({
-            '无人机运动方向': heading_deg,
-            '无人机运动速度 (m/s)': round(v_best,3),
-            '烟幕干扰弹编号（1 2 3）': k,
-            '烟幕干扰弹投放点的x坐标 (m)': round(r_drop[0],3),
-            '烟幕干扰弹投放点的y坐标 (m)': round(r_drop[1],3),
-            '烟幕干扰弹投放点的z坐标 (m)': round(r_drop[2],3),
-            '烟幕干扰弹起爆点的x坐标 (m)': round(x_e,3),
-            '烟幕干扰弹起爆点的y坐标 (m)': round(y_e,3),
-            '烟幕干扰弹起爆点的z坐标 (m)': round(z_e,3),
-            '有效干扰时长 (s)': round(ti,3)
-        })
-    # DataFrame 按题目 result1 模板字段保存
-    df = pd.DataFrame(rows, columns=[
-        '无人机运动方向','无人机运动速度 (m/s)','烟幕干扰弹编号（1 2 3）',
-        '烟幕干扰弹投放点的x坐标 (m)','烟幕干扰弹投放点的y坐标 (m)','烟幕干扰弹投放点的z坐标 (m)',
-        '烟幕干扰弹起爆点的x坐标 (m)','烟幕干扰弹起爆点的y坐标 (m)','烟幕干扰弹起爆点的z坐标 (m)',
-        '有效干扰时长 (s)'
-    ])
-    out_path = "result1.xlsx"
-    df.to_excel(out_path, index=False)
-    print("Final union shielding time:", round(tot,3), "s")
-    print("Saved result to", out_path)
+    
+    print("=" * 60)
+    print("Q3: 单无人机三烟幕弹协同干扰问题求解完成")
+    print("=" * 60)
+    
+    print(f"\n📊 最优解结果:")
+    print(f"  总遮蔽时间: {tot:.3f} 秒")
+    print(f"  最优速度: {v_best:.1f} m/s")
+    print(f"  最优角度: {th_best:.1f}°")
+    print(f"  起爆时间序列: {[round(e, 2) for e in E_best]} 秒")
+    print(f"  遮蔽区间数量: {len(uni_best)} 个")
+    print(f"  遮蔽区间: {[(round(a, 2), round(b, 2)) for a, b in uni_best]}")
+    
+    # 生成可视化图表
+    print("\n🎨 生成可视化图表...")
+    create_visualizations(v_best, th_best, E_best, uni_best, tot)
+    
+    # 保存结果到Excel
+    print("\n💾 保存结果到Excel...")
+    save_results_to_excel(v_best, th_best, E_best, uni_best, tot)
+    
+    print(f"\n✅ Q3问题求解完成！总遮蔽时间: {tot:.3f} 秒")
 
 if __name__ == '__main__':
     main()

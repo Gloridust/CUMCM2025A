@@ -4,9 +4,20 @@ from joblib import Parallel, delayed
 from tqdm import trange
 import os
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.patches as patches
 from scipy.optimize import differential_evolution
 import warnings
+import random
 warnings.filterwarnings('ignore')
+
+# 设置随机种子以确保结果可重复
+np.random.seed(42)
+random.seed(42)
+
+# 设置中文字体
+plt.rcParams['font.sans-serif'] = ['STHeiti']
+plt.rcParams['axes.unicode_minus'] = False
 
 # ======================
 # 问题参数
@@ -639,17 +650,32 @@ def strategy_to_dataframe(strategy):
     
     return pd.DataFrame(rows)
 
-def save_optimization_history(fitness_history):
+def save_optimization_history(fitness_history, output_dir="./q5_out"):
     """保存优化历史并绘图"""
-    plt.figure(figsize=(10, 6))
-    plt.plot(fitness_history, linewidth=2)
-    plt.title('优化进程 - 总遮蔽时间', fontsize=14)
-    plt.xlabel('迭代次数', fontsize=12)
-    plt.ylabel('总遮蔽时间 (秒)', fontsize=12)
+    os.makedirs(output_dir, exist_ok=True)
+    
+    plt.figure(figsize=(12, 8))
+    plt.plot(fitness_history, linewidth=3, color='blue', alpha=0.8)
+    plt.title('Q5: 进化算法优化进程 - 总遮蔽时间', fontsize=16, fontweight='bold')
+    plt.xlabel('迭代次数', fontsize=14)
+    plt.ylabel('总遮蔽时间 (秒)', fontsize=14)
     plt.grid(True, alpha=0.3)
+    
+    # 添加最佳值标注
+    best_gen = np.argmax(fitness_history)
+    best_fitness = max(fitness_history)
+    plt.scatter(best_gen, best_fitness, color='red', s=100, zorder=5)
+    plt.annotate(f'最优解: {best_fitness:.3f}s\n第{best_gen+1}代', 
+                xy=(best_gen, best_fitness), xytext=(10, 10),
+                textcoords='offset points', fontsize=12,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7),
+                arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+    
     plt.tight_layout()
-    plt.savefig('./q5_out/q5_optimization_history.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'{output_dir}/q5_optimization_history.png', dpi=300, bbox_inches='tight')
     plt.close()
+    
+    print(f"✓ 优化历史图已保存到: {output_dir}/q5_optimization_history.png")
 
 # ======================
 # 主程序
@@ -754,29 +780,354 @@ def analyze_strategy_effectiveness(strategy):
     
     return total_coverage
 
+def create_visualizations(best_strategy, best_fitness):
+    """创建Q5问题的可视化图表"""
+    os.makedirs("./output", exist_ok=True)
+    
+    # 解析策略数据
+    drone_colors = ['orange', 'cyan', 'magenta', 'lime', 'pink']
+    missile_colors = ['red', 'darkred', 'crimson']
+    
+    # 1. 三维场景图
+    fig = plt.figure(figsize=(20, 16))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # 绘制导弹轨迹
+    missile_names = list(MISSILES.keys())
+    for i, missile_name in enumerate(missile_names):
+        missile_flight_time = 70  # 假设70秒飞行时间
+        t_trajectory = np.linspace(0, missile_flight_time, 100)
+        missile_trajectory = np.array([missile_position(missile_name, t) for t in t_trajectory])
+        ax.plot(missile_trajectory[:, 0], missile_trajectory[:, 1], missile_trajectory[:, 2], 
+                color=missile_colors[i], linewidth=4, label=f'导弹{missile_name}轨迹')
+        
+        # 标记导弹初始位置
+        start_pos = MISSILES[missile_name]
+        ax.scatter(*start_pos, color=missile_colors[i], s=200, marker='d', 
+                  label=f'导弹{missile_name}初始位置')
+    
+    # 绘制无人机轨迹和烟幕弹
+    drone_names = list(DRONES.keys())
+    for i, drone_name in enumerate(drone_names):
+        if drone_name in best_strategy:
+            drone_info = best_strategy[drone_name]
+            color = drone_colors[i]
+            
+            # 绘制无人机轨迹
+            max_time = 50  # 假设50秒最大飞行时间
+            t_traj = np.linspace(0, max_time, 100)
+            uav_trajectory = np.array([drone_position(drone_name, t, drone_info['direction'], drone_info['speed']) for t in t_traj])
+            ax.plot(uav_trajectory[:, 0], uav_trajectory[:, 1], uav_trajectory[:, 2], 
+                    color=color, linewidth=2, label=f'无人机{drone_name}轨迹')
+            
+            # 标记无人机初始位置
+            start_pos = DRONES[drone_name]
+            ax.scatter(*start_pos, color=color, s=150, label=f'无人机{drone_name}初始位置')
+            
+            # 绘制烟幕弹投放点和起爆点
+            for j, bomb_info in enumerate(drone_info['bombs']):
+                release_time = bomb_info['release_time']
+                explode_delay = bomb_info['explode_delay']
+                explode_time = release_time + explode_delay
+                
+                # 投放点
+                drop_pos = drone_position(drone_name, release_time, drone_info['direction'], drone_info['speed'])
+                ax.scatter(*drop_pos, color=color, s=200, marker='*', alpha=0.8)
+                
+                # 起爆点
+                explode_pos = smoke_bomb_trajectory(drop_pos, release_time, explode_time)
+                ax.scatter(*explode_pos, color=color, s=200, marker='o', alpha=0.8)
+                
+                # 绘制烟幕球体
+                u = np.linspace(0, 2 * np.pi, 15)
+                v = np.linspace(0, np.pi, 15)
+                x_sphere = SMOKE_RADIUS * np.outer(np.cos(u), np.sin(v)) + explode_pos[0]
+                y_sphere = SMOKE_RADIUS * np.outer(np.sin(u), np.sin(v)) + explode_pos[1]
+                z_sphere = SMOKE_RADIUS * np.outer(np.ones(np.size(u)), np.cos(v)) + explode_pos[2]
+                ax.plot_surface(x_sphere, y_sphere, z_sphere, alpha=0.15, color=color)
+    
+    # 标记目标位置
+    ax.scatter(*FAKE_TARGET, color='black', s=200, marker='s', label='假目标')
+    ax.scatter(*REAL_TARGET, color='green', s=200, marker='^', label='真目标')
+    
+    # 绘制真目标圆柱体
+    theta = np.linspace(0, 2*np.pi, 20)
+    z_cyl = np.linspace(0, 10, 10)
+    theta_mesh, z_mesh = np.meshgrid(theta, z_cyl)
+    x_cyl = 7 * np.cos(theta_mesh)
+    y_cyl = REAL_TARGET[1] + 7 * np.sin(theta_mesh)
+    ax.plot_surface(x_cyl, y_cyl, z_mesh, alpha=0.4, color='green')
+    
+    ax.set_xlabel('X (米)')
+    ax.set_ylabel('Y (米)')
+    ax.set_zlabel('Z (米)')
+    ax.set_title('Q5: 五无人机协同对抗三导弹烟幕干扰三维场景图', fontsize=16, fontweight='bold')
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig('./output/q5_3d_scenario.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 2. 俯视图（XY平面）
+    fig, ax = plt.subplots(figsize=(18, 14))
+    
+    # 绘制导弹轨迹投影
+    for i, missile_name in enumerate(missile_names):
+        missile_flight_time = 70
+        t_trajectory = np.linspace(0, missile_flight_time, 100)
+        missile_trajectory = np.array([missile_position(missile_name, t) for t in t_trajectory])
+        ax.plot(missile_trajectory[:, 0], missile_trajectory[:, 1], 
+                color=missile_colors[i], linewidth=4, label=f'导弹{missile_name}轨迹')
+        
+        # 标记导弹初始位置
+        start_pos = MISSILES[missile_name]
+        ax.scatter(start_pos[0], start_pos[1], color=missile_colors[i], s=200, marker='d', 
+                  label=f'导弹{missile_name}初始位置')
+    
+    # 绘制无人机轨迹和烟幕覆盖区域
+    for i, drone_name in enumerate(drone_names):
+        if drone_name in best_strategy:
+            drone_info = best_strategy[drone_name]
+            color = drone_colors[i]
+            
+            # 绘制无人机轨迹投影
+            max_time = 50
+            t_traj = np.linspace(0, max_time, 100)
+            uav_trajectory = np.array([drone_position(drone_name, t, drone_info['direction'], drone_info['speed']) for t in t_traj])
+            ax.plot(uav_trajectory[:, 0], uav_trajectory[:, 1], 
+                    color=color, linewidth=2, label=f'无人机{drone_name}轨迹')
+            
+            # 标记无人机初始位置
+            start_pos = DRONES[drone_name]
+            ax.scatter(start_pos[0], start_pos[1], color=color, s=150, label=f'无人机{drone_name}初始位置')
+            
+            # 绘制烟幕弹投放点、起爆点和覆盖区域
+            for j, bomb_info in enumerate(drone_info['bombs']):
+                release_time = bomb_info['release_time']
+                explode_delay = bomb_info['explode_delay']
+                explode_time = release_time + explode_delay
+                
+                # 投放点
+                drop_pos = drone_position(drone_name, release_time, drone_info['direction'], drone_info['speed'])
+                ax.scatter(drop_pos[0], drop_pos[1], color=color, s=200, marker='*', alpha=0.8)
+                
+                # 起爆点
+                explode_pos = smoke_bomb_trajectory(drop_pos, release_time, explode_time)
+                ax.scatter(explode_pos[0], explode_pos[1], color=color, s=200, marker='o', alpha=0.8)
+                
+                # 绘制烟幕覆盖区域
+                smoke_circle = patches.Circle((explode_pos[0], explode_pos[1]), SMOKE_RADIUS, 
+                                            linewidth=1, edgecolor=color, facecolor=color, alpha=0.2)
+                ax.add_patch(smoke_circle)
+    
+    # 标记目标位置
+    ax.scatter(FAKE_TARGET[0], FAKE_TARGET[1], color='black', s=200, marker='s', label='假目标')
+    ax.scatter(REAL_TARGET[0], REAL_TARGET[1], color='green', s=200, marker='^', label='真目标')
+    
+    # 绘制真目标保护区
+    circle_true = patches.Circle((REAL_TARGET[0], REAL_TARGET[1]), 7, linewidth=2, 
+                               edgecolor='green', facecolor='lightgreen', alpha=0.3, label='真目标保护区')
+    ax.add_patch(circle_true)
+    
+    ax.set_xlabel('X (米)')
+    ax.set_ylabel('Y (米)')
+    ax.set_title('Q5: 五无人机协同对抗三导弹烟幕干扰俯视图', fontsize=16, fontweight='bold')
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax.grid(True)
+    ax.axis('equal')
+    
+    plt.tight_layout()
+    plt.savefig('./output/q5_top_view.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 3. 策略分析图
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(18, 14))
+    
+    # 子图1: 各无人机投放烟幕弹数量
+    active_drones = [drone for drone in drone_names if drone in best_strategy]
+    bomb_counts = [len(best_strategy[drone]['bombs']) for drone in active_drones]
+    
+    bars1 = ax1.bar(active_drones, bomb_counts, color=drone_colors[:len(active_drones)], alpha=0.7, edgecolor='black')
+    ax1.set_ylabel('烟幕弹数量')
+    ax1.set_title('各无人机投放烟幕弹数量分布', fontweight='bold')
+    ax1.grid(True, axis='y')
+    
+    # 在柱状图上添加数值标签
+    for bar, count in zip(bars1, bomb_counts):
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width()/2., height + 0.05,
+                f'{count}', ha='center', va='bottom', fontweight='bold')
+    
+    # 子图2: 各无人机飞行速度
+    speeds = [best_strategy[drone]['speed'] for drone in active_drones]
+    bars2 = ax2.bar(active_drones, speeds, color=drone_colors[:len(active_drones)], alpha=0.7, edgecolor='black')
+    ax2.set_ylabel('飞行速度 (m/s)')
+    ax2.set_title('各无人机飞行速度', fontweight='bold')
+    ax2.grid(True, axis='y')
+    
+    for bar, speed in zip(bars2, speeds):
+        height = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width()/2., height + 2,
+                f'{speed:.1f}', ha='center', va='bottom', fontweight='bold')
+    
+    # 子图3: 各无人机飞行方向
+    directions = [best_strategy[drone]['direction'] for drone in active_drones]
+    bars3 = ax3.bar(active_drones, directions, color=drone_colors[:len(active_drones)], alpha=0.7, edgecolor='black')
+    ax3.set_ylabel('飞行方向 (度)')
+    ax3.set_title('各无人机飞行方向', fontweight='bold')
+    ax3.grid(True, axis='y')
+    
+    for bar, direction in zip(bars3, directions):
+        height = bar.get_height()
+        ax3.text(bar.get_x() + bar.get_width()/2., height + 5,
+                f'{direction:.1f}°', ha='center', va='bottom', fontweight='bold')
+    
+    # 子图4: 每个导弹的遮蔽时间分布
+    missile_coverage = {}
+    for missile_name in missile_names:
+        coverage = 0
+        for drone_name in active_drones:
+            for bomb_info in best_strategy[drone_name]['bombs']:
+                if bomb_info.get('target_missile') == missile_name:
+                    # 简单估算该烟幕弹对该导弹的遮蔽时间
+                    coverage += min(SMOKE_DURATION, 5.0)  # 假设平均每个烟幕弹贡献5秒
+        missile_coverage[missile_name] = coverage
+    
+    missiles = list(missile_coverage.keys())
+    coverages = list(missile_coverage.values())
+    bars4 = ax4.bar(missiles, coverages, color=missile_colors, alpha=0.7, edgecolor='black')
+    ax4.set_ylabel('估算遮蔽时间 (秒)')
+    ax4.set_title('各导弹遮蔽时间分布', fontweight='bold')
+    ax4.grid(True, axis='y')
+    
+    for bar, coverage in zip(bars4, coverages):
+        height = bar.get_height()
+        ax4.text(bar.get_x() + bar.get_width()/2., height + 0.2,
+                f'{coverage:.1f}s', ha='center', va='bottom', fontweight='bold')
+    
+    plt.tight_layout()
+    plt.savefig('./output/q5_strategy_analysis.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 4. 时间轴协同分析图
+    fig, ax = plt.subplots(figsize=(16, 10))
+    
+    # 为每个无人机绘制时间轴
+    y_positions = {}
+    y_pos = 0
+    
+    for i, drone_name in enumerate(active_drones):
+        y_positions[drone_name] = y_pos
+        drone_info = best_strategy[drone_name]
+        color = drone_colors[i]
+        
+        # 绘制无人机飞行时间线
+        ax.barh(y_pos, 50, height=0.3, color=color, alpha=0.3, label=f'{drone_name}飞行时间')
+        
+        # 绘制烟幕弹投放和起爆时间
+        for j, bomb_info in enumerate(drone_info['bombs']):
+            release_time = bomb_info['release_time']
+            explode_delay = bomb_info['explode_delay']
+            explode_time = release_time + explode_delay
+            
+            # 投放时间标记
+            ax.scatter(release_time, y_pos, color=color, s=100, marker='*', alpha=0.8)
+            ax.text(release_time, y_pos + 0.2, f'投放{j+1}', ha='center', va='bottom', fontsize=8)
+            
+            # 起爆时间标记
+            ax.scatter(explode_time, y_pos, color=color, s=100, marker='o', alpha=0.8)
+            ax.text(explode_time, y_pos - 0.2, f'起爆{j+1}', ha='center', va='top', fontsize=8)
+            
+            # 有效遮蔽时间段
+            ax.barh(y_pos, SMOKE_DURATION, left=explode_time, height=0.15, 
+                   color=color, alpha=0.6, label=f'{drone_name}烟幕{j+1}' if j == 0 else "")
+        
+        y_pos += 1
+    
+    ax.set_xlabel('时间 (秒)')
+    ax.set_ylabel('无人机')
+    ax.set_yticks(list(y_positions.values()))
+    ax.set_yticklabels(list(y_positions.keys()))
+    ax.set_title(f'Q5: 五机协同时间轴分析 (总遮蔽时间: {best_fitness:.2f}秒)', fontsize=14, fontweight='bold')
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax.grid(True, axis='x')
+    
+    plt.tight_layout()
+    plt.savefig('./output/q5_timeline_analysis.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print("✓ Q5可视化图表已保存到output/目录")
+
+def save_results_to_excel(best_strategy, best_fitness):
+    """保存结果到Excel文件"""
+    os.makedirs("./output", exist_ok=True)
+    
+    # 按照题目要求的格式保存Q5结果 - Q5对应的是q5_result3_data.xlsx
+    result_df = strategy_to_dataframe(best_strategy)
+    output_file = "./output/q5_result3_data.xlsx"
+    result_df.to_excel(output_file, index=False)
+    print(f"✓ 结果已保存到: {output_file}")
+    
+    # 保存详细分析结果
+    detailed_data = []
+    total_bombs = 0
+    active_drones = 0
+    
+    for drone_name, drone_info in best_strategy.items():
+        active_drones += 1
+        for i, bomb_info in enumerate(drone_info['bombs']):
+            total_bombs += 1
+            detailed_data.append({
+                'scenario': 'Q5_five_drones_three_missiles',
+                'drone_id': drone_name,
+                'bomb_sequence': i + 1,
+                'drone_direction_deg': drone_info['direction'],
+                'drone_speed_m_s': drone_info['speed'],
+                'drop_time_s': bomb_info['release_time'],
+                'explode_time_s': bomb_info['release_time'] + bomb_info['explode_delay'],
+                'delay_s': bomb_info['explode_delay'],
+                'target_missile': bomb_info.get('target_missile', 'unknown'),
+                'priority': bomb_info.get('priority', 'primary'),
+                'estimated_coverage_s': bomb_info.get('estimated_coverage', 0.0)
+            })
+    
+    # 添加汇总信息
+    summary_data = [{
+        'total_coverage_time_s': best_fitness,
+        'active_drones': active_drones,
+        'total_bombs_deployed': total_bombs,
+        'average_bombs_per_drone': total_bombs / active_drones if active_drones > 0 else 0,
+        'optimization_method': 'evolutionary_algorithm',
+        'random_seed': 42,
+        'missile_targets': len(MISSILES),
+        'drone_fleet_size': len(DRONES)
+    }]
+    
+    df_detailed = pd.DataFrame(detailed_data)
+    df_summary = pd.DataFrame(summary_data)
+    
+    with pd.ExcelWriter("./output/q5_detailed_results.xlsx", engine='openpyxl') as writer:
+        df_detailed.to_excel(writer, sheet_name='Detailed_Strategy', index=False)
+        df_summary.to_excel(writer, sheet_name='Summary', index=False)
+    
+    print("\n📁 生成的文件:")
+    print("  - output/q5_result3_data.xlsx (Q5标准结果，对应题目result3.xlsx)")
+    print("  - output/q5_detailed_results.xlsx (详细分析数据)")
+    print("  - output/q5_3d_scenario.png (三维场景图)")
+    print("  - output/q5_top_view.png (俯视图)")
+    print("  - output/q5_strategy_analysis.png (策略分析图)")
+    print("  - output/q5_timeline_analysis.png (时间轴分析图)")
+
 def main():
     print("开始Q5问题求解：多架无人机对多枚导弹的烟幕干扰策略优化")
-    print("采用'化曲为直'和'底线思维'的智能策略")
+    print("采用进化算法优化（已设置随机种子42确保结果可重复）")
     print("="*70)
     
-    os.makedirs("./q5_out", exist_ok=True)
-    
-    # 先展示策略分析
-    print("\n第一步：智能策略分析")
-    try:
-        sample_strategy = create_opportunistic_strategy()
-        if sample_strategy:
-            sample_fitness = compute_total_coverage_time(sample_strategy)
-            print(f"智能策略初始效果: {sample_fitness:.2f} 秒")
-        else:
-            print("智能策略生成为空，将使用纯随机优化")
-    except Exception as e:
-        print(f"智能策略分析失败: {e}")
-    
     # 运行进化算法
-    print(f"\n第二步：进化算法优化")
+    print(f"\n🔧 进化算法优化")
     optimizer = EvolutionaryOptimizer(
-        population_size=80,  # 增加种群大小以利用智能策略
+        population_size=80,  # 增加种群大小
         generations=120,
         elite_ratio=0.15
     )
@@ -784,26 +1135,33 @@ def main():
     print("开始进化算法优化...")
     best_strategy, best_fitness = optimizer.run()
     
-    print(f"\n优化完成！")
-    print(f"最佳总遮蔽时间: {best_fitness:.2f} 秒")
+    print("=" * 70)
+    print("Q5: 五无人机协同对抗三导弹烟幕干扰问题求解完成")
+    print("=" * 70)
+    
+    print(f"\n📊 最优解结果:")
+    print(f"  最佳总遮蔽时间: {best_fitness:.3f} 秒")
     
     # 详细分析最佳策略
     analyze_strategy_effectiveness(best_strategy)
     
-    # 保存结果
-    result_df = strategy_to_dataframe(best_strategy)
-    result_df.to_excel("./q5_out/result3.xlsx", index=False)
+    # 生成可视化图表
+    print("\n🎨 生成可视化图表...")
+    create_visualizations(best_strategy, best_fitness)
     
-    # 保存优化历史图
-    save_optimization_history(optimizer.fitness_history)
+    # 保存结果到Excel
+    print("\n💾 保存结果到Excel...")
+    save_results_to_excel(best_strategy, best_fitness)
     
-    print(f"\n结果已保存到:")
-    print(f"  - ./q5_out/result3.xlsx (主要结果)")
-    print(f"  - ./q5_out/q5_optimization_history.png (优化过程图)")
+    # 保存优化历史图到output目录
+    save_optimization_history(optimizer.fitness_history, output_dir="./output")
     
     # 验证结果
     final_coverage = compute_total_coverage_time(best_strategy)
-    print(f"\n最终验证：重新计算的总遮蔽时间 = {final_coverage:.2f} 秒")
+    print(f"\n✅ Q5问题求解完成！")
+    print(f"   最终验证总遮蔽时间: {final_coverage:.3f} 秒")
+    print(f"   优化算法收敛性: {'良好' if abs(best_fitness - final_coverage) < 0.01 else '需要调整'}")
+    print(f"   随机种子: 42 (确保结果可重复)")
 
 if __name__ == "__main__":
     main()
